@@ -27,7 +27,7 @@
       teal: "#2F8299", blue: "#1F45D1", red: "#E0261E", ink: "#111111", out: "#F1F5F6",
     },
     novy: {
-      id: "novy", name: "Nový", note: "Velká fotka, vedle dny a pod nimi menší fotka, barva podle měsíce.",
+      id: "novy", name: "Nový", note: "Velká fotka, vedle dny a pod nimi jedna nebo dvě menší fotky, barva podle měsíce.",
       ink: "#1E2226", muted: "#6A7077", hair: "#D8DCE0", red: "#C0262D",
     },
   };
@@ -107,7 +107,7 @@
       pages.push({
         kind: "week", id: "w:" + w.monday, week: w,
         title: `${w.isoWeek}. týden`, sub: rangeLabel(w),
-        L: slots.L || null, R: slots.R || null,
+        L: slots.L || null, R: slots.R || null, R2: slots.R2 || null,
       });
     }
     const bonus = (doc.bonus || []).filter(Boolean);
@@ -188,7 +188,9 @@
 
   /** Velká fotka vlevo, vpravo hlavička a dny, pod nimi menší fotka. Přizpůsobí se výšce stránky. */
   function weekNovy(L, page, ctx, th) {
-    const { x0, y0, CW, CH } = L;
+    const pad = L.bind >= 8 ? 6 : 0; // kus místa navíc pod vazbou, ať to není nalepené nahoře
+    const { x0, CW } = L;
+    const y0 = L.y0 + pad, CH = L.CH - pad;
     const m = x0;
     const w = page.week;
     const acc = MONTH_ACCENT[w.months[w.months.length - 1]];
@@ -249,8 +251,12 @@
     });
     const end = top + 7 * rh;
     L.items.push({ t: "line", x1: rx, y1: end, x2: rx + rw, y2: end, c: th.hair, lw: 0.25 });
-    const py = end + 5;
-    slotImg(L, page.id + ":R", rx, py, rw, y0 + CH - py, page.R, { r: 2 });
+    const py = end + 5, ph = y0 + CH - py;
+    if (ctx.split) { // pod dny dvě fotky vedle sebe místo jedné široké
+      const g2 = 4, hw = (rw - g2) / 2;
+      slotImg(L, page.id + ":R", rx, py, hw, ph, page.R, { r: 2 });
+      slotImg(L, page.id + ":R2", rx + hw + g2, py, hw, ph, page.R2, { r: 2 });
+    } else slotImg(L, page.id + ":R", rx, py, rw, ph, page.R, { r: 2 });
   }
 
   // ----- titulka -----

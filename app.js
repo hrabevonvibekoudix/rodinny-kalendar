@@ -45,6 +45,7 @@ function normSettings(d) {
   return {
     year: Number.isInteger(+d.year) && +d.year > 1900 && +d.year < 2200 ? +d.year : defaultYear(),
     theme: R.THEMES[d.theme] ? d.theme : "klasik",
+    split: !!d.split, // Nový vzhled: pod dny dvě fotky místo jedné široké
     // starší nastavení bez vazby (celá A4) nahradí nový výchozí formát 297 × 182 s vazbou nahoře
     page: Object.assign({}, R.PAGE_DEFAULT, d.page && typeof d.page === "object" && d.page.bind != null ? d.page : {}),
   };
@@ -106,7 +107,7 @@ async function deletePhoto(id) {
     const d = app.years[y];
     const uses = Object.values(d.weeks || {}).some((w) => (w.L && w.L.photo === id) || (w.R && w.R.photo === id)) || (d.bonus || []).includes(id);
     if (uses) updateYear((dd) => {
-      for (const [k, w] of Object.entries(dd.weeks)) { for (const s of ["L", "R"]) if (w[s] && w[s].photo === id) delete w[s]; if (!w.L && !w.R) delete dd.weeks[k]; }
+      for (const [k, w] of Object.entries(dd.weeks)) { for (const s of ["L", "R", "R2"]) if (w[s] && w[s].photo === id) delete w[s]; if (!w.L && !w.R && !w.R2) delete dd.weeks[k]; }
       dd.bonus = dd.bonus.filter((b) => b !== id);
     }, y);
   }
@@ -138,14 +139,18 @@ function setRef(key, ref) {
   if (k.kind === "week") updateYear((d) => {
     const w = (d.weeks[k.monday] = d.weeks[k.monday] || {});
     if (ref) w[k.side] = ref; else delete w[k.side];
-    if (!w.L && !w.R) delete d.weeks[k.monday];
+    if (!w.L && !w.R && !w.R2) delete d.weeks[k.monday];
   });
   else if (k.kind === "cover") updateFamily((f) => { const p = f.people.find((x) => x.id === k.personId); if (p) { if (ref) p.portrait = ref; else delete p.portrait; } });
   else if (k.kind === "bonus") updateYear((d) => { if (ref) d.bonus[k.index] = ref.photo; else d.bonus.splice(k.index, 1); });
 }
 function slotLabel(key) {
   const k = parseKey(key);
-  if (k.kind === "week") return app.settings.theme === "novy" ? (k.side === "L" ? "Velká fotka" : "Fotka pod dny") : (k.side === "L" ? "Levá fotka" : "Pravá fotka");
+  if (k.kind === "week") {
+    if (k.side === "R2") return "Fotka pod dny vpravo";
+    if (app.settings.theme !== "novy") return k.side === "L" ? "Levá fotka" : "Pravá fotka";
+    return k.side === "L" ? "Velká fotka" : app.settings.split ? "Fotka pod dny vlevo" : "Fotka pod dny";
+  }
   if (k.kind === "cover") { const p = person(k.personId); return "Portrét – " + (p ? p.name : ""); }
   if (k.kind === "bonus") return `Bonusová fotka ${k.index + 1}`;
   return "";
@@ -230,8 +235,11 @@ async function importFiles(files, opts) {
 const mctx = document.createElement("canvas").getContext("2d");
 function measure(s, f, size) { mctx.font = `${size}px "${f}"`; return mctx.measureText(s).width * R.PT; }
 function layoutCtx(theme) {
-  return { theme: theme || app.settings.theme, page: app.settings.page, year: app.settings.year, photos: app.photos, measure };
+  return { theme: theme || app.settings.theme, page: app.settings.page, year: app.settings.year, photos: app.photos, measure, split: app.settings.split };
 }
+/** Místa na fotky v týdnu podle vzhledu (Nový může mít pod dny dvě fotky). */
+const sides = () => (app.settings.theme === "novy" && app.settings.split ? ["L", "R", "R2"] : ["L", "R"]);
+const weekMissing = (p) => sides().some((s) => !p[s]);
 let calMemo = {};
 function calendar() {
   const s = app.settings, f = app.family;
@@ -254,7 +262,7 @@ function usage() {
   const add = (id, label) => { if (!id) return; if (!map.has(id)) map.set(id, []); map.get(id).push(label); };
   for (const p of app.family.people) if (p.portrait) add(p.portrait.photo, "titulka");
   for (const pg of pages()) {
-    if (pg.kind === "week") { if (pg.L) add(pg.L.photo, pg.title); if (pg.R) add(pg.R.photo, pg.title); }
+    if (pg.kind === "week") for (const s of sides()) if (pg[s]) add(pg[s].photo, pg.title);
     if (pg.kind === "bonus") pg.items.forEach((it) => add(it.photo, "bonusy"));
   }
   return map;
@@ -277,10 +285,12 @@ function autoFill() {
   updateYear((d) => {
     for (const w of cal.weeks) {
       const slots = d.weeks[w.monday] || {};
-      for (const side of ["R", "L"]) {
+      for (const side of ["R", "R2", "L"].filter((s) => sides().includes(s))) {
         if (slots[side]) continue;
-        const wantLand = app.settings.theme === "novy" ? side === "R" : false;
-        const score = (p) => (landscape(p) === wantLand ? 0 : 1) + (p.people.length === 1 ? 0 : 0.5);
+        const novy = app.settings.theme === "novy";
+        const wantLand = novy && side === "R" && !app.settings.split; // široký pruh pod dny chce fotku na šířku
+        const anyShape = novy && app.settings.split && side !== "L"; // dvě fotky pod dny jsou skoro čtverce
+        const score = (p) => (anyShape || landscape(p) === wantLand ? 0 : 1) + (p.people.length === 1 ? 0 : 0.5);
         let cand = ph.filter((p) => !used.has(p.id) && p.people.some((x) => w.celebrants.includes(x))).sort((a, b) => score(a) - score(b));
         if (!cand.length) cand = ph.filter((p) => !used.has(p.id) && !p.people.some((x) => celebrateLater.has(x))).sort((a, b) => score(a) - score(b));
         const pick = cand[0];
@@ -289,7 +299,7 @@ function autoFill() {
         used.add(pick.id);
         filled++;
       }
-      if (slots.L || slots.R) d.weeks[w.monday] = slots;
+      if (slots.L || slots.R || slots.R2) d.weeks[w.monday] = slots;
     }
   });
   toast(filled ? `Doplněno ${filled} fotek. Zkontrolujte je v náhledu.` : "Není co doplnit – chybí nepoužité fotky.", filled ? "ok" : "warn");
@@ -545,7 +555,7 @@ function CalendarTab() {
   });
   const listRef = useRef(null);
   useEffect(() => { const el = listRef.current && listRef.current.querySelector(".pl-item.on"); if (el) el.scrollIntoView({ block: "nearest" }); }, [i]);
-  const empty = ps.filter((p) => p.kind === "week" && (!p.L || !p.R)).length;
+  const empty = ps.filter((p) => p.kind === "week" && weekMissing(p)).length;
   return html`<div class="cal-grid">
     <nav class="pagelist" ref=${listRef} aria-label="Stránky kalendáře">
       ${ps.map((p, j) => html`<button key=${p.id} class=${"pl-item" + (j === i ? " on" : "")} onClick=${() => go(j)}>
@@ -555,7 +565,7 @@ function CalendarTab() {
           <small>${p.sub}</small>
           ${p.kind === "week" && p.week.celebrants.length ? html`<small class="cel">${celebrantsOf(p.week).map((c) => c.text).join(", ")}</small>` : null}
         </span>
-        ${p.kind === "week" ? html`<span class="pl-dots" aria-label=${(p.L ? 1 : 0) + (p.R ? 1 : 0) + " ze 2 fotek"}><i class=${p.L ? "on" : ""}></i><i class=${p.R ? "on" : ""}></i></span>` : null}
+        ${p.kind === "week" ? html`<span class="pl-dots" aria-label=${sides().filter((s) => p[s]).length + " z " + sides().length + " fotek"}>${sides().map((s) => html`<i class=${p[s] ? "on" : ""}></i>`)}</span>` : null}
       </button>`)}
     </nav>
     <section class="stage">
@@ -567,6 +577,10 @@ function CalendarTab() {
         <div class="seg" role="group" aria-label="Vzhled">
           ${Object.values(R.THEMES).map((t) => html`<button class=${app.settings.theme === t.id ? "on" : ""} onClick=${() => saveSettings({ theme: t.id })}>${t.name}</button>`)}
         </div>
+        ${app.settings.theme === "novy" ? html`<div class="seg" role="group" aria-label="Fotky pod dny">
+          <button class=${!app.settings.split ? "on" : ""} onClick=${() => saveSettings({ split: false })} title="Pod dny jedna široká fotka">Pod dny 1 fotka</button>
+          <button class=${app.settings.split ? "on" : ""} onClick=${() => saveSettings({ split: true })} title="Pod dny dvě fotky vedle sebe">2 fotky</button>
+        </div>` : null}
         <button class="btn" onClick=${autoFill} disabled=${!app.backend.canUpload} title="Doplní jen prázdná místa, nic nepřepíše">Doplnit fotky (${empty} týdnů chybí)</button>
       </div>
       <${PageCanvas} page=${page} interactive=${app.backend.canUpload} active=${sel && sel.type === "slot" ? sel.key : null}
@@ -610,8 +624,7 @@ function PagePanel({ page, onPick }) {
       return html`<li><b>${c.text}</b> <small>${c.date.day}. ${K.MONTHS_GEN[c.date.month]}</small><br /><small class="muted">${n ? `${n} ${n === 1 ? "fotka" : n < 5 ? "fotky" : "fotek"} v zásobě` : "zatím žádná fotka"}</small></li>`;
     })}</ul>` : html`<p class="muted">Tento týden nikdo z rodiny nemá narozeniny.</p>`}
     <div class="stack">
-      <button class="btn" onClick=${() => onPick({ type: "slot", key: page.id + ":L" })}>${page.L ? "Upravit" : "Přidat"} ${slotLabel(page.id + ":L").toLowerCase()}</button>
-      <button class="btn" onClick=${() => onPick({ type: "slot", key: page.id + ":R" })}>${page.R ? "Upravit" : "Přidat"} ${slotLabel(page.id + ":R").toLowerCase()}</button>
+      ${sides().map((s) => html`<button class="btn" onClick=${() => onPick({ type: "slot", key: page.id + ":" + s })}>${page[s] ? "Upravit" : "Přidat"} ${slotLabel(page.id + ":" + s).toLowerCase()}</button>`)}
     </div>
     <p class="muted">Na den klikněte, když chcete upravit jméno, svátek nebo přidat poznámku.</p>
   </div>`;
@@ -824,14 +837,14 @@ function FamilyTab() {
 // ---------- záložka Tisk ----------
 function PrintTab() {
   const ps = pages();
-  const firstFull = ps.findIndex((p) => p.kind === "week" && p.L && p.R);
+  const firstFull = ps.findIndex((p) => p.kind === "week" && !weekMissing(p));
   const [sample, setSample] = useState(firstFull > 0 ? firstFull : 1);
   const [pdf, setPdf] = useState(null); // {state, done, total, blob}
   const [bk, setBk] = useState(null);
   const [usageInfo, setUsageInfo] = useState(null);
   useEffect(() => { app.backend.usage().then(setUsageInfo); }, [Object.keys(app.photos).length]);
   const weeks = ps.filter((p) => p.kind === "week");
-  const missing = weeks.filter((p) => !p.L || !p.R);
+  const missing = weeks.filter(weekMissing);
   const noPortrait = app.family.people.filter((p) => !p.portrait && !p.noCover);
   const ctx = layoutCtx();
   const lowRes = [];
@@ -862,7 +875,7 @@ function PrintTab() {
     <section class="card">
       <div class="card-head"><h2>Kontrola před tiskem</h2></div>
       <ul class="checks">
-        <li class=${missing.length ? "warn" : "ok"}>${missing.length ? `${missing.length} z ${weeks.length} týdnů nemá obě fotky (týdny ${missing.slice(0, 12).map((p) => p.week.isoWeek).join(", ")}${missing.length > 12 ? " a další" : ""}).` : "Všechny týdny mají obě fotky."}</li>
+        <li class=${missing.length ? "warn" : "ok"}>${missing.length ? `${missing.length} z ${weeks.length} týdnů nemá všechny fotky (týdny ${missing.slice(0, 12).map((p) => p.week.isoWeek).join(", ")}${missing.length > 12 ? " a další" : ""}).` : "Všechny týdny mají všechny fotky."}</li>
         <li class=${noPortrait.length ? "warn" : "ok"}>${noPortrait.length ? `Bez portrétu na titulce: ${noPortrait.map((p) => p.name).join(", ")}` : "Titulka je kompletní."}</li>
         <li class=${lowRes.length ? "warn" : "ok"}>${lowRes.length ? `Možná rozmazané fotky: ${[...new Set(lowRes)].join(", ")}` : "Rozlišení fotek je v pořádku."}</li>
       </ul>
