@@ -27,12 +27,21 @@
       teal: "#2F8299", blue: "#1F45D1", red: "#E0261E", ink: "#111111", out: "#F1F5F6",
     },
     novy: {
-      id: "novy", name: "Nový", note: "Velká fotka přes celou výšku, barva podle měsíce, víc vzduchu.",
+      id: "novy", name: "Nový", note: "Barva podle měsíce, zaoblené fotky, víc vzduchu.",
       ink: "#1E2226", muted: "#6A7077", hair: "#D8DCE0", red: "#C0262D",
     },
   };
 
-  const PAGE_DEFAULT = { w: 297, h: 210, m: 10 };
+  // Stránka jako máma tiskne: 297 × 182 mm, hřebenová vazba nahoře (bind = volný pruh pro vazbu).
+  // sheet: "a4cut" = tisk na A4 a odstřižení spodku, "exact" = PDF přesně ve velikosti stránky.
+  const PAGE_DEFAULT = { w: 297, h: 182, m: 10, bind: 16, sheet: "a4cut" };
+
+  /** Na jaký papír se PDF tiskne a kde se stříhá. */
+  function sheetFor(page) {
+    const p = Object.assign({}, PAGE_DEFAULT, page);
+    if (p.sheet === "a4cut" && Math.abs(p.w - 297) < 0.6 && p.h < 209.5) return { w: 297, h: 210, cutY: p.h };
+    return { w: p.w, h: p.h, cutY: null };
+  }
 
   // ---------- pomocné ----------
   function mix(hex, t) { // smíchá barvu s bílou: t=0 bílá, t=1 původní
@@ -115,7 +124,11 @@
    * Vrací {items, slots, days}; slots/days slouží k proklikávání v náhledu.
    */
   function layout(page, ctx) {
-    const L = { items: [], slots: [], days: [], measure: ctx.measure, W: ctx.page.w, H: ctx.page.h, m: ctx.page.m };
+    const pg = Object.assign({}, PAGE_DEFAULT, ctx.page);
+    const top = Math.max(pg.m, pg.bind || 0);
+    // obsahový rámeček: nahoře pruh pro vazbu, jinde okraj m
+    const L = { items: [], slots: [], days: [], measure: ctx.measure, W: pg.w, H: pg.h, m: pg.m, bind: pg.bind || 0,
+      x0: pg.m, y0: top, CW: pg.w - 2 * pg.m, CH: pg.h - top - pg.m };
     const th = THEMES[ctx.theme] || THEMES.klasik;
     if (page.kind === "cover") (th.id === "novy" ? coverNovy : coverKlasik)(L, page, ctx, th);
     else if (page.kind === "week") (th.id === "novy" ? weekNovy : weekKlasik)(L, page, ctx, th);
@@ -131,12 +144,13 @@
 
   // ----- týden: klasický (jako mámin Excel) -----
   function weekKlasik(L, page, ctx, th) {
-    const { W, m } = L;
-    const CW = W - 2 * m;
+    const { x0, CW, CH } = L;
+    const m = x0;
     const wl = CW * 0.31, wd = CW * 0.38, wr = CW - wl - wd;
-    const bh = wl / 0.74; // fotky 3:4 jako dosud
-    const hh = 15;
-    const y0 = m, by = y0 + hh, mx = m + wl;
+    const hh = 14;
+    const bh = Math.min(CH - hh, wl / 0.72); // fotky zhruba 3:4 jako dosud
+    const y0 = L.y0 + (CH - hh - bh) / 2; // blok svisle doprostřed pod vazbu
+    const by = y0 + hh, mx = m + wl;
     const w = page.week;
 
     T(L, mx + 3, y0 + 10.5, w.monthLabel, "arimo-700", 24, th.teal, "left", wd * 0.66);
@@ -170,22 +184,77 @@
   }
 
   // ----- týden: nový vzhled -----
+  const monthTitle = (w) => w.monthLabel.toLowerCase().replace(/^./, (c) => c.toUpperCase());
+
   function weekNovy(L, page, ctx, th) {
-    const { W, H, m } = L;
-    const CW = W - 2 * m, CH = H - 2 * m;
+    if (L.CW / L.CH > 1.45) return weekNovyWide(L, page, ctx, th);
+    return weekNovyTall(L, page, ctx, th);
+  }
+
+  /** Široká stránka (máma: 297 × 182 s vazbou): hlavička přes celou šířku, pod ní fotka – dny – fotka. */
+  function weekNovyWide(L, page, ctx, th) {
+    const { x0, y0, CW, CH } = L;
+    const w = page.week;
+    const acc = MONTH_ACCENT[w.months[w.months.length - 1]];
+    const g = 5, hh = 19;
+    const wl = CW * 0.34, wd = CW * 0.345, wr = CW - wl - wd - 2 * g;
+    const by = y0 + hh, bh = CH - hh;
+    const dx = x0 + wl + g;
+
+    T(L, x0, y0 + 11, monthTitle(w), "lora-700", 30, acc, "left", wl + wd);
+    T(L, x0 + CW, y0 + 11, `${w.isoWeek}. týden`, "lora-500", 15, acc, "right");
+    T(L, x0 + CW, y0 + 15.6, rangeLabel(w), "asans-500", 8.5, th.muted, "right");
+    L.items.push({ t: "line", x1: x0, y1: by - 2.5, x2: x0 + CW, y2: by - 2.5, c: acc, lw: 0.5 });
+
+    slotImg(L, page.id + ":L", x0, by, wl, bh, page.L, { r: 2 });
+    slotImg(L, page.id + ":R", dx + wd + g, by, wr, bh, page.R, { r: 2 });
+
+    const rh = bh / 7;
+    w.days.forEach((d, i) => {
+      const ry = by + i * rh;
+      if (i) L.items.push({ t: "line", x1: dx, y1: ry, x2: dx + wd, y2: ry, c: th.hair, lw: 0.25 });
+      if (!d) { L.items.push({ t: "rect", x: dx, y: ry + 0.5, w: wd, h: rh - 1, fill: "#F5F6F7" }); return; }
+      L.days.push({ date: d.date, md: d.md, x: dx, y: ry, w: wd, h: rh });
+      if (d.dow >= 5 || d.red) L.items.push({ t: "rect", x: dx, y: ry + 0.4, w: wd, h: rh - 0.8, fill: mix(d.red ? th.red : acc, 0.07) });
+      const col = d.red ? th.red : th.ink;
+      const base = ry + Math.min(rh * 0.62, 11.5);
+      T(L, dx + 11, base, String(d.day), "lora-700", 20, col, "right");
+      T(L, dx + 12.6, base, d.dowLabel.toUpperCase(), "asans-700", 7, d.red ? th.red : th.muted, "left");
+      const tx = dx + 21.5, tw = wd - 22.5;
+      T(L, tx, ry + 4.6, d.saint, "asans-400i", 7, th.muted, "left", tw, 0.55);
+      T(L, tx, ry + 8.8, d.name, "asans-700", 9, th.ink, "left", tw, 0.6);
+      const many = d.events.length > 2;
+      const step = many ? 2.9 : 3.5;
+      let yy = ry + 8.8 + (many ? 3.2 : 3.9);
+      for (const e of d.events) {
+        if (yy > ry + rh - 0.6) break;
+        const f = e.kind === "liturgy" ? "lora-400i" : "asans-700";
+        const c = e.kind === "birthday" ? acc : e.kind === "custom" && e.red ? th.red : e.kind === "liturgy" ? th.muted : th.ink;
+        const indent = e.kind === "birthday" ? 2.6 : 0;
+        if (e.kind === "birthday") L.items.push({ t: "circle", cx: tx + 0.85, cy: yy - (many ? 0.8 : 1), rad: 0.85, fill: acc });
+        T(L, tx + indent, yy, e.text, f, many ? 7 : 8, c, "left", tw - indent, 0.6);
+        yy += step;
+      }
+    });
+  }
+
+  /** Vysoká stránka (celá A4): velká fotka přes celou výšku, vpravo dny a pod nimi menší fotka. */
+  function weekNovyTall(L, page, ctx, th) {
+    const { x0, y0, CW, CH } = L;
+    const m = x0;
     const w = page.week;
     const acc = MONTH_ACCENT[w.months[w.months.length - 1]];
     const lw = CW * 0.555, gap = 7;
     const rx = m + lw + gap, rw = CW - lw - gap;
 
-    slotImg(L, page.id + ":L", m, m, lw, CH, page.L, { r: 2 });
+    slotImg(L, page.id + ":L", m, y0, lw, CH, page.L, { r: 2 });
 
     // hlavička
-    T(L, rx, m + 10.5, w.monthLabel.toLowerCase().replace(/^./, (c) => c.toUpperCase()), "lora-700", 30, acc, "left", rw - 30);
-    T(L, rx + rw, m + 10.5, String(w.isoWeek), "lora-500", 30, mix(acc, 0.35), "right");
-    T(L, rx, m + 17, `${w.isoWeek}. týden  ·  ${rangeLabel(w)}`, "asans-500", 9, th.muted, "left", rw);
+    T(L, rx, y0 + 10.5, monthTitle(w), "lora-700", 30, acc, "left", rw - 30);
+    T(L, rx + rw, y0 + 10.5, String(w.isoWeek), "lora-500", 30, mix(acc, 0.35), "right");
+    T(L, rx, y0 + 17, `${w.isoWeek}. týden  ·  ${rangeLabel(w)}`, "asans-500", 9, th.muted, "left", rw);
 
-    const top = m + 22, rh = 13.2;
+    const top = y0 + 22, rh = Math.min(13.2, (CH - 22 - 35) / 7);
     w.days.forEach((d, i) => {
       const ry = top + i * rh;
       L.items.push({ t: "line", x1: rx, y1: ry, x2: rx + rw, y2: ry, c: i === 0 ? acc : th.hair, lw: i === 0 ? 0.5 : 0.25 });
@@ -227,7 +296,7 @@
     const end = top + 7 * rh;
     L.items.push({ t: "line", x1: rx, y1: end, x2: rx + rw, y2: end, c: th.hair, lw: 0.25 });
     const py = end + 5;
-    slotImg(L, page.id + ":R", rx, py, rw, m + CH - py, page.R, { r: 2 });
+    slotImg(L, page.id + ":R", rx, py, rw, y0 + CH - py, page.R, { r: 2 });
   }
 
   // ----- titulka -----
@@ -247,12 +316,11 @@
   }
 
   function coverLayout(L, page, ctx, th, gap, r) {
-    const { W, H, m } = L;
-    const CW = W - 2 * m, CH = H - 2 * m;
+    const { CW, CH } = L;
     const ps = page.portraits;
     const g = coverGrid(ps.length, CW, CH, gap);
     const gw = g.cols * g.s + gap * (g.cols - 1), gh = g.rows * g.s + gap * (g.rows - 1);
-    const x0 = m + (CW - gw) / 2, y0 = m + (CH - gh) / 2;
+    const x0 = L.x0 + (CW - gw) / 2, y0 = L.y0 + (CH - gh) / 2;
     const yr = Math.floor((g.rows - 1) / 2), yc = Math.floor((g.cols - 2) / 2);
     let k = 0;
     const cells = [];
@@ -326,12 +394,12 @@
   }
 
   function bonusPage(L, page, ctx, th) {
-    const { W, H, m } = L;
-    const CW = W - 2 * m, CH = H - 2 * m;
+    const { W, x0, y0, CW, CH } = L;
+    const m = x0;
     const klas = th.id === "klasik";
     const gap = klas ? 0 : 2.5;
-    const capH = klas ? 14 : 16;
-    const by = klas ? m : m + capH;
+    const capH = klas ? 12 : 14;
+    const by = klas ? y0 : y0 + capH;
     const aspects = page.items.map((it) => {
       const p = ctx.photos[it.photo];
       return p && p.w && p.h ? Math.min(2.4, Math.max(0.5, p.w / p.h)) : 1.333;
@@ -341,10 +409,10 @@
       const r = rects[i];
       slotImg(L, "bonus:" + it.index, r.x, r.y, r.w, r.h, { photo: it.photo }, klas ? { frame: { c: th.teal, lw: 0.35 } } : { r: 1.4 });
     });
-    if (klas) T(L, W / 2, H - m - 3, "B O N U S Y   -   C O   S E   N E V E Š L O", "arimo-700", 14, th.teal, "center", CW);
+    if (klas) T(L, W / 2, y0 + CH - 2, "B O N U S Y   -   C O   S E   N E V E Š L O", "arimo-700", 13, th.teal, "center", CW);
     else {
-      T(L, m, m + 9, "Bonusy", "lora-700", 24, MONTH_ACCENT[11], "left");
-      T(L, m + (L.measure ? L.measure("Bonusy", "lora-700", 24) : 30) + 4, m + 9, "co se do týdnů nevešlo", "lora-400i", 13, th.muted, "left");
+      T(L, m, y0 + 8.5, "Bonusy", "lora-700", 22, MONTH_ACCENT[11], "left");
+      T(L, m + (L.measure ? L.measure("Bonusy", "lora-700", 22) : 30) + 4, y0 + 8.5, "co se do týdnů nevešlo", "lora-400i", 12, th.muted, "left");
     }
   }
 
@@ -396,6 +464,10 @@
     g.fillStyle = "#FFFFFF";
     g.fillRect(0, 0, L.W, L.H);
     g.textBaseline = "alphabetic";
+    if (opts.placeholders && L.bind >= 8) { // jen v náhledu: kde bude hřebenová vazba
+      g.fillStyle = "#E3E6E8";
+      for (let x = 7; x < L.W - 5; x += 14.28) { roundRectPath(g, x, 3.2, 3.4, 2.2, 0.8); g.fill(); }
+    }
     for (const it of L.items) {
       if (it.t === "rect") {
         roundRectPath(g, it.x, it.y, it.w, it.h, it.r || 0);
@@ -521,7 +593,7 @@
     }
   }
 
-  const api = { PT, FONT_FILES, THEMES, MONTH_ACCENT, PAGE_DEFAULT, COVER_ORDERS, buildPages, layout, drawCanvas, drawPdf, registerFonts,
+  const api = { PT, FONT_FILES, THEMES, MONTH_ACCENT, PAGE_DEFAULT, COVER_ORDERS, sheetFor, buildPages, layout, drawCanvas, drawPdf, registerFonts,
     coverRect, panCrop, slotDpi, rangeLabel, justify };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.KalRender = api;

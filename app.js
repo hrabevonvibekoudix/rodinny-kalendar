@@ -45,7 +45,8 @@ function normSettings(d) {
   return {
     year: Number.isInteger(+d.year) && +d.year > 1900 && +d.year < 2200 ? +d.year : defaultYear(),
     theme: R.THEMES[d.theme] ? d.theme : "klasik",
-    page: Object.assign({}, R.PAGE_DEFAULT, d.page && typeof d.page === "object" ? d.page : {}),
+    // starší nastavení bez vazby (celá A4) nahradí nový výchozí formát 297 × 182 s vazbou nahoře
+    page: Object.assign({}, R.PAGE_DEFAULT, d.page && typeof d.page === "object" && d.page.bind != null ? d.page : {}),
   };
 }
 function normFamily(d) {
@@ -312,19 +313,27 @@ async function loadFull(photoId) {
 }
 async function buildPdf(onProgress) {
   const { jsPDF } = window.jspdf;
-  const pg = app.settings.page, land = pg.w >= pg.h;
+  const sh = R.sheetFor(app.settings.page), land = sh.w >= sh.h;
   const ctx = layoutCtx();
   const layouts = pages().map((p) => R.layout(p, ctx));
-  const fonts = new Set();
+  const fonts = new Set(sh.cutY ? ["asans-400"] : []);
   layouts.forEach((L) => L.items.forEach((it) => it.t === "text" && fonts.add(it.f)));
-  const doc = new jsPDF({ orientation: land ? "landscape" : "portrait", unit: "mm", format: [pg.w, pg.h], compress: true });
+  const doc = new jsPDF({ orientation: land ? "landscape" : "portrait", unit: "mm", format: [sh.w, sh.h], compress: true });
   const bufs = {};
   fonts.forEach((f) => (bufs[f] = app.fonts[f]));
   R.registerFonts(doc, bufs);
   doc.setProperties({ title: `Rodinný kalendář ${app.settings.year}` });
   for (let i = 0; i < layouts.length; i++) {
-    if (i) doc.addPage([pg.w, pg.h], land ? "landscape" : "portrait");
+    if (i) doc.addPage([sh.w, sh.h], land ? "landscape" : "portrait");
     await R.drawPdf(doc, layouts[i], { full: loadFull });
+    if (sh.cutY) { // čára, kde odstřihnout spodek A4
+      doc.setLineDashPattern([2.5, 1.5], 0);
+      doc.setDrawColor("#A9AFB5"); doc.setLineWidth(0.2);
+      doc.line(0, sh.cutY, sh.w, sh.cutY);
+      doc.setLineDashPattern([], 0);
+      doc.setFont("asans-400", "normal"); doc.setFontSize(7); doc.setTextColor("#A9AFB5");
+      doc.text("zde odstřihnout", sh.w / 2, sh.cutY + 4, { align: "center" });
+    }
     onProgress(i + 1, layouts.length);
     await new Promise((r) => setTimeout(r, 0));
   }
@@ -858,9 +867,10 @@ function PrintTab() {
         <li class=${lowRes.length ? "warn" : "ok"}>${lowRes.length ? `Možná rozmazané fotky: ${[...new Set(lowRes)].join(", ")}` : "Rozlišení fotek je v pořádku."}</li>
       </ul>
     </section>
+    <${FormatCard} />
     <section class="card">
       <div class="card-head"><h2>PDF pro tisk</h2></div>
-      <p>Celý kalendář ${app.settings.year} jako jedno PDF: ${ps.length} stran A4 na šířku, fotky v tiskovém rozlišení. Trvá to zhruba minutu.</p>
+      <p>Celý kalendář ${app.settings.year} jako jedno PDF: ${ps.length} stran ${R.sheetFor(app.settings.page).cutY ? "na A4 s čárou, kde odstřihnout spodek" : `ve velikosti ${app.settings.page.w} × ${app.settings.page.h} mm`}, fotky v tiskovém rozlišení. Trvá to zhruba minutu.</p>
       ${!pdf || pdf.state === "err" ? html`<button class="btn primary big" onClick=${make}>Vytvořit PDF</button>` : null}
       ${pdf && pdf.state === "run" ? html`<div class="progress"><span style=${`width:${(pdf.done / pdf.total) * 100}%`}></span><small>Strana ${pdf.done} z ${pdf.total}…</small></div>` : null}
       ${pdf && pdf.state === "done" ? html`<div class="stack row">
@@ -901,6 +911,30 @@ function PrintTab() {
       </div>` : null}
     </section>
   </div>`;
+}
+
+function FormatCard() {
+  const pg = app.settings.page;
+  const set = (patch) => saveSettings({ page: Object.assign({}, pg, patch) });
+  const num = (v, lo, hi) => { const n = Math.round(+String(v).replace(",", ".")); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : null; };
+  const is = (w, h) => pg.w === w && pg.h === h;
+  return html`<section class="card">
+    <div class="card-head"><h2>Formát stránky</h2></div>
+    <div class="seg wrap">
+      <button class=${is(297, 182) ? "on" : ""} onClick=${() => set({ w: 297, h: 182, bind: 16 })}>Jako dosud (29,7 × 18,2 cm, vazba nahoře)</button>
+      <button class=${is(297, 210) ? "on" : ""} onClick=${() => set({ w: 297, h: 210 })}>Celá A4 na šířku</button>
+    </div>
+    <div class="stack row">
+      <label class="inline">Šířka <input id="pg-w" class="num" inputmode="numeric" value=${pg.w} onChange=${(e) => { const v = num(e.target.value, 100, 600); if (v) set({ w: v }); }} /> mm</label>
+      <label class="inline">Výška <input id="pg-h" class="num" inputmode="numeric" value=${pg.h} onChange=${(e) => { const v = num(e.target.value, 80, 600); if (v) set({ h: v }); }} /> mm</label>
+      <label class="inline">Volno nahoře pro vazbu <input id="pg-b" class="num" inputmode="numeric" value=${pg.bind} onChange=${(e) => { const v = num(e.target.value, 0, 40); if (v != null) set({ bind: v }); }} /> mm</label>
+    </div>
+    <div class="field"><span>Jak se bude tisknout</span>
+      <label class="check"><input type="radio" name="sheet" checked=${pg.sheet !== "exact"} onChange=${() => set({ sheet: "a4cut" })} /> Doma na A4 – v PDF bude čárkovaná čára, kde spodek odstřihnout</label>
+      <label class="check"><input type="radio" name="sheet" checked=${pg.sheet === "exact"} onChange=${() => set({ sheet: "exact" })} /> V copy centru – PDF přesně ve velikosti stránky</label>
+    </div>
+    <p class="muted">Šedé obdélníčky nahoře v náhledu ukazují, kudy povede hřebenová vazba. Do PDF se netisknou.</p>
+  </section>`;
 }
 
 function TokenSetup({ cfg }) {
