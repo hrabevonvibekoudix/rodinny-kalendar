@@ -27,7 +27,7 @@
       teal: "#2F8299", blue: "#1F45D1", red: "#E0261E", ink: "#111111", out: "#F1F5F6",
     },
     novy: {
-      id: "novy", name: "Nový", note: "Barva podle měsíce, zaoblené fotky, víc vzduchu.",
+      id: "novy", name: "Nový", note: "Velká fotka, vedle dny a pod nimi menší fotka, barva podle měsíce.",
       ink: "#1E2226", muted: "#6A7077", hair: "#D8DCE0", red: "#C0262D",
     },
   };
@@ -186,75 +186,29 @@
   // ----- týden: nový vzhled -----
   const monthTitle = (w) => w.monthLabel.toLowerCase().replace(/^./, (c) => c.toUpperCase());
 
+  /** Velká fotka vlevo, vpravo hlavička a dny, pod nimi menší fotka. Přizpůsobí se výšce stránky. */
   function weekNovy(L, page, ctx, th) {
-    if (L.CW / L.CH > 1.45) return weekNovyWide(L, page, ctx, th);
-    return weekNovyTall(L, page, ctx, th);
-  }
-
-  /** Široká stránka (máma: 297 × 182 s vazbou): hlavička přes celou šířku, pod ní fotka – dny – fotka. */
-  function weekNovyWide(L, page, ctx, th) {
-    const { x0, y0, CW, CH } = L;
-    const w = page.week;
-    const acc = MONTH_ACCENT[w.months[w.months.length - 1]];
-    const g = 5, hh = 19;
-    const wl = CW * 0.34, wd = CW * 0.345, wr = CW - wl - wd - 2 * g;
-    const by = y0 + hh, bh = CH - hh;
-    const dx = x0 + wl + g;
-
-    T(L, x0, y0 + 11, monthTitle(w), "lora-700", 30, acc, "left", wl + wd);
-    T(L, x0 + CW, y0 + 11, `${w.isoWeek}. týden`, "lora-500", 15, acc, "right");
-    T(L, x0 + CW, y0 + 15.6, rangeLabel(w), "asans-500", 8.5, th.muted, "right");
-    L.items.push({ t: "line", x1: x0, y1: by - 2.5, x2: x0 + CW, y2: by - 2.5, c: acc, lw: 0.5 });
-
-    slotImg(L, page.id + ":L", x0, by, wl, bh, page.L, { r: 2 });
-    slotImg(L, page.id + ":R", dx + wd + g, by, wr, bh, page.R, { r: 2 });
-
-    const rh = bh / 7;
-    w.days.forEach((d, i) => {
-      const ry = by + i * rh;
-      if (i) L.items.push({ t: "line", x1: dx, y1: ry, x2: dx + wd, y2: ry, c: th.hair, lw: 0.25 });
-      if (!d) { L.items.push({ t: "rect", x: dx, y: ry + 0.5, w: wd, h: rh - 1, fill: "#F5F6F7" }); return; }
-      L.days.push({ date: d.date, md: d.md, x: dx, y: ry, w: wd, h: rh });
-      if (d.dow >= 5 || d.red) L.items.push({ t: "rect", x: dx, y: ry + 0.4, w: wd, h: rh - 0.8, fill: mix(d.red ? th.red : acc, 0.07) });
-      const col = d.red ? th.red : th.ink;
-      const base = ry + Math.min(rh * 0.62, 11.5);
-      T(L, dx + 11, base, String(d.day), "lora-700", 20, col, "right");
-      T(L, dx + 12.6, base, d.dowLabel.toUpperCase(), "asans-700", 7, d.red ? th.red : th.muted, "left");
-      const tx = dx + 21.5, tw = wd - 22.5;
-      T(L, tx, ry + 4.6, d.saint, "asans-400i", 7, th.muted, "left", tw, 0.55);
-      T(L, tx, ry + 8.8, d.name, "asans-700", 9, th.ink, "left", tw, 0.6);
-      const many = d.events.length > 2;
-      const step = many ? 2.9 : 3.5;
-      let yy = ry + 8.8 + (many ? 3.2 : 3.9);
-      for (const e of d.events) {
-        if (yy > ry + rh - 0.6) break;
-        const f = e.kind === "liturgy" ? "lora-400i" : "asans-700";
-        const c = e.kind === "birthday" ? acc : e.kind === "custom" && e.red ? th.red : e.kind === "liturgy" ? th.muted : th.ink;
-        const indent = e.kind === "birthday" ? 2.6 : 0;
-        if (e.kind === "birthday") L.items.push({ t: "circle", cx: tx + 0.85, cy: yy - (many ? 0.8 : 1), rad: 0.85, fill: acc });
-        T(L, tx + indent, yy, e.text, f, many ? 7 : 8, c, "left", tw - indent, 0.6);
-        yy += step;
-      }
-    });
-  }
-
-  /** Vysoká stránka (celá A4): velká fotka přes celou výšku, vpravo dny a pod nimi menší fotka. */
-  function weekNovyTall(L, page, ctx, th) {
     const { x0, y0, CW, CH } = L;
     const m = x0;
     const w = page.week;
     const acc = MONTH_ACCENT[w.months[w.months.length - 1]];
-    const lw = CW * 0.555, gap = 7;
+    const gap = 7;
+    const lw = Math.min(CW * 0.58, Math.max(CW * 0.5, CH)); // velká fotka zhruba čtvercová
     const rx = m + lw + gap, rw = CW - lw - gap;
+    const low = CH < 170; // nižší stránka (máma: 182 mm s vazbou) → menší hlavička a řádky
+    const hh = low ? 19 : 22;
+    const rh = Math.max(10, Math.min(13.2, (CH - hh - 5 - CH * 0.36) / 7)); // menší fotka dostane ~36 % výšky
+    const k = Math.max(0.86, rh / 13.2); // zmenšení písma v nižších řádcích
 
     slotImg(L, page.id + ":L", m, y0, lw, CH, page.L, { r: 2 });
 
     // hlavička
-    T(L, rx, y0 + 10.5, monthTitle(w), "lora-700", 30, acc, "left", rw - 30);
-    T(L, rx + rw, y0 + 10.5, String(w.isoWeek), "lora-500", 30, mix(acc, 0.35), "right");
-    T(L, rx, y0 + 17, `${w.isoWeek}. týden  ·  ${rangeLabel(w)}`, "asans-500", 9, th.muted, "left", rw);
+    const hy = y0 + (low ? 9.5 : 10.5);
+    T(L, rx, hy, monthTitle(w), "lora-700", low ? 26 : 30, acc, "left", rw - 26);
+    T(L, rx + rw, hy, String(w.isoWeek), "lora-500", low ? 26 : 30, mix(acc, 0.35), "right");
+    T(L, rx, y0 + (low ? 15.2 : 17), `${w.isoWeek}. týden  ·  ${rangeLabel(w)}`, "asans-500", low ? 8.5 : 9, th.muted, "left", rw);
 
-    const top = y0 + 22, rh = Math.min(13.2, (CH - 22 - 35) / 7);
+    const top = y0 + hh;
     w.days.forEach((d, i) => {
       const ry = top + i * rh;
       L.items.push({ t: "line", x1: rx, y1: ry, x2: rx + rw, y2: ry, c: i === 0 ? acc : th.hair, lw: i === 0 ? 0.5 : 0.25 });
@@ -262,13 +216,13 @@
       L.days.push({ date: d.date, md: d.md, x: rx, y: ry, w: rw, h: rh });
       if (d.dow >= 5 || d.red) L.items.push({ t: "rect", x: rx, y: ry + 0.3, w: rw, h: rh - 0.6, fill: mix(d.red ? th.red : acc, 0.06) });
       const col = d.red ? th.red : th.ink;
-      T(L, rx + 10, ry + 9, String(d.day), "lora-700", 19, col, "right");
-      T(L, rx + 12, ry + 8.6, d.dowLabel.toUpperCase(), "asans-700", 7, d.red ? th.red : th.muted, "left");
+      T(L, rx + 10, ry + rh * 0.68, String(d.day), "lora-700", 19 * k, col, "right");
+      T(L, rx + 12, ry + rh * 0.65, d.dowLabel.toUpperCase(), "asans-700", 7, d.red ? th.red : th.muted, "left");
 
       // události vpravo, jejich šířka určí, kolik místa zbude na jména
       const ev = d.events.map((e) => {
         const f = e.kind === "birthday" ? "asans-700" : e.kind === "liturgy" ? "lora-400i" : "asans-700";
-        const size = d.events.length > 2 ? 7.2 : e.kind === "liturgy" ? 8.4 : 8.6;
+        const size = (d.events.length > 2 ? 7.2 : e.kind === "liturgy" ? 8.4 : 8.6) * (d.events.length > 2 ? 1 : k);
         const c = e.kind === "birthday" ? acc : e.kind === "custom" && e.red ? th.red : e.kind === "liturgy" ? th.muted : th.ink;
         return { e, f, size, c };
       });
@@ -278,9 +232,9 @@
         x.size = fitText(L.measure, x.e.text, x.f, x.size, maxEv - (x.e.kind === "birthday" ? 3 : 0), 0.7);
         evW = Math.max(evW, (L.measure ? L.measure(x.e.text, x.f, x.size) : 30) + (x.e.kind === "birthday" ? 3 : 0));
       }
-      const lineH = (s) => s * PT + 1.1;
+      const lineH = (s) => s * PT + (low ? 0.8 : 1.1);
       const totalH = ev.reduce((a, x) => a + lineH(x.size), 0);
-      let yy = ry + rh / 2 - totalH / 2;
+      let yy = ry + rh / 2 - totalH / 2 + (low ? 0.3 : 0);
       for (const x of ev) {
         yy += lineH(x.size);
         L.items.push({ t: "text", x: rx + rw - 1, y: yy - 1.1, s: x.e.text, f: x.f, size: x.size, c: x.c, a: "right" });
@@ -290,8 +244,8 @@
         }
       }
       const tx = rx + 21, tw = Math.max(20, rw - 21 - (ev.length ? evW + 3 : 0));
-      T(L, tx, ry + 5.2, d.saint, "asans-400i", 7.2, th.muted, "left", tw, 0.55);
-      T(L, tx, ry + 9.6, d.name, "asans-700", 9, th.ink, "left", tw, 0.6);
+      T(L, tx, ry + rh * 0.39, d.saint, "asans-400i", 7.2 * Math.max(0.92, k), th.muted, "left", tw, 0.55);
+      T(L, tx, ry + rh * 0.74, d.name, "asans-700", 9 * k, th.ink, "left", tw, 0.6);
     });
     const end = top + 7 * rh;
     L.items.push({ t: "line", x1: rx, y1: end, x2: rx + rw, y2: end, c: th.hair, lw: 0.25 });
